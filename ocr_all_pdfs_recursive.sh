@@ -59,15 +59,25 @@ process_pdf() {
     output_file="$OUTPUT_DIR/$relative_path"
     mkdir -p "$(dirname "$output_file")"
 
-    original_md5=$(calculate_md5 "$input_file")
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Processing file: $input_file (MD5: $original_md5)" >> "$LOG_FILE"
+    if [[ ! -f "$input_file" ]]; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Error: File not found: $input_file" >> "$LOG_FILE"
+        return 1
+    fi
 
-    ocrmypdf -l eng+spa --rotate-pages --deskew --jobs 4 --output-type pdfa "$input_file" "$output_file" 2>> "$LOG_FILE"
+    original_md5=$(calculate_md5 "$input_file")
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Processing file: \"$input_file\" (MD5: $original_md5)" >> "$LOG_FILE"
+
+    if ! ocrmypdf -l eng+spa --rotate-pages --deskew --jobs 4 --output-type pdfa "$input_file" "$output_file" 2>> "$LOG_FILE"; then
+        echo "$(date '+%Y-%m-%d %H:%M:%S') Error processing file: \"$input_file\"" >> "$LOG_FILE"
+        return 1
+    fi
 
     processed_md5=$(calculate_md5 "$output_file")
-    echo "$(date '+%Y-%m-%d %H:%M:%S') Processed file: $output_file (MD5: $processed_md5)" >> "$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') Processed file: \"$output_file\" (MD5: $processed_md5)" >> "$LOG_FILE"
 }
 
+export -f calculate_md5
+export -f process_pdf
 export INPUT_DIR OUTPUT_DIR LOG_FILE
 
 # Find all PDF files and process them in parallel for OCR
