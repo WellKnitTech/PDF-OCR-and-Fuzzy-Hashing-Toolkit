@@ -67,7 +67,7 @@ process_pdf() {
     original_md5=$(calculate_md5 "$input_file")
     echo "$(date '+%Y-%m-%d %H:%M:%S') Processing file: \"$input_file\" (MD5: $original_md5)" >> "$LOG_FILE"
 
-    if ! ocrmypdf -l eng+spa --rotate-pages --deskew --jobs 4 --output-type pdfa "$input_file" "$output_file" 2>> "$LOG_FILE"; then
+    if ! ocrmypdf -l eng+spa --rotate-pages --deskew --jobs 16 --output-type pdfa "$input_file" "$output_file" 2>> "$LOG_FILE"; then
         echo "$(date '+%Y-%m-%d %H:%M:%S') Error processing file: \"$input_file\"" >> "$LOG_FILE"
         return 1
     fi
