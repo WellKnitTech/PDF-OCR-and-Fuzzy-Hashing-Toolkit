@@ -73,4 +73,3 @@ Contributions to this project are welcome! Please fork the repository and submit
 ## License
 
 This project is released under the Unlicense - see the [LICENSE](LICENSE) file for details.
-```
