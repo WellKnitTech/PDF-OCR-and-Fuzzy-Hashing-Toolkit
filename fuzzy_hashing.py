@@ -3,13 +3,13 @@ import readline
 import glob
 import sqlite3
 import hashlib
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path
 from PIL import Image
 import ssdeep
 import fitz  # PyMuPDF
 from collections import defaultdict
-from multiprocessing import Pool, cpu_count, Manager, Queue
 import tempfile
+from tqdm import tqdm
 
 # Enable tab completion
 readline.parse_and_bind("tab: complete")
@@ -24,7 +24,7 @@ readline.set_completer(complete_path)
 
 # Initialize database
 def init_db(db_path):
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS page_hashes (
@@ -38,35 +38,41 @@ def init_db(db_path):
     conn.commit()
     conn.close()
 
-# Worker function to hash pages and store in database
-def hash_pdf_pages(queue, db_path):
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+# Function to hash pages and store in database
+def hash_pdf_pages(pdf_path, db_path):
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    while True:
-        pdf_path = queue.get()
-        if pdf_path is None:
-            break
+    try:
+        print(f"Processing file: {pdf_path}")  # Debug: processing start
 
-        try:
-            images = convert_from_path(pdf_path)
-            original_md5 = calculate_md5(pdf_path)
-            for page_number, image in enumerate(images, start=1):
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmpfile:
-                    image.save(tmpfile.name)
-                    with open(tmpfile.name, 'rb') as f:
-                        page_hash = ssdeep.hash(f.read())
-                        cursor.execute('''
-                            INSERT INTO page_hashes (pdf_path, page_number, page_hash, original_md5)
-                            VALUES (?, ?, ?, ?)
-                        ''', (pdf_path, page_number, page_hash, original_md5))
-            conn.commit()
-        except Exception as e:
-            print(f"Error processing file {pdf_path}: {e}")
-            if 'Unable to get page count' in str(e):
-                print("Please ensure poppler-utils is installed and in your PATH.")
+        original_md5 = calculate_md5(pdf_path)
+        info = pdfinfo_from_path(pdf_path)
+        total_pages = info["Pages"]
+        pbar = tqdm(total=total_pages, desc=f"Processing pages for {os.path.basename(pdf_path)}", leave=False)
 
-    conn.close()
+        for page_number in range(1, total_pages + 1):
+            images = convert_from_path(pdf_path, first_page=page_number, last_page=page_number)
+            image = images[0]
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as tmpfile:
+                image.save(tmpfile.name)
+                with open(tmpfile.name, 'rb') as f:
+                    page_hash = ssdeep.hash(f.read())
+                    cursor.execute('''
+                        INSERT INTO page_hashes (pdf_path, page_number, page_hash, original_md5)
+                        VALUES (?, ?, ?, ?)
+                    ''', (pdf_path, page_number, page_hash, original_md5))
+            pbar.update(1)
+
+        pbar.close()
+        conn.commit()
+        print(f"Processed and committed file: {pdf_path}")  # Debug: processing complete
+    except Exception as e:
+        print(f"Error processing file {pdf_path}: {e}")
+        if 'Unable to get page count' in str(e):
+            print("Please ensure poppler-utils is installed and in your PATH.")
+    finally:
+        conn.close()
 
 def calculate_md5(file_path):
     hash_md5 = hashlib.md5()
@@ -75,7 +81,7 @@ def calculate_md5(file_path):
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-def find_similar_pages(db_path, similarity_threshold=95):
+def find_similar_pages(db_path, similarity_threshold=70):  # Lowered the threshold to 70
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
@@ -88,6 +94,7 @@ def find_similar_pages(db_path, similarity_threshold=95):
         for j in range(i + 1, len(hashes)):
             similarity = ssdeep.compare(hashes[i], hashes[j])
             if similarity >= similarity_threshold:
+                print(f"Similarity between page {i+1} and page {j+1}: {similarity}")  # Debug information
                 cursor.execute('SELECT pdf_path, page_number, original_md5 FROM page_hashes WHERE page_hash=?', (hashes[i],))
                 pages_i = cursor.fetchall()
                 cursor.execute('SELECT pdf_path, page_number, original_md5 FROM page_hashes WHERE page_hash=?', (hashes[j],))
@@ -141,26 +148,12 @@ def main():
         print("No PDF files found to process.")
         return
 
-    # Process all PDFs in parallel using a manager queue
-    manager = Manager()
-    queue = manager.Queue()
-
-    # Start worker processes
-    pool = Pool(cpu_count())
-    for _ in range(cpu_count()):
-        pool.apply_async(hash_pdf_pages, (queue, db_path))
-
-    # Add files to queue
+    # Process all PDFs sequentially with a progress bar
+    pbar = tqdm(total=total_files, desc="Processing PDFs")
     for pdf_path in pdf_files:
-        queue.put(pdf_path)
-
-    # Add sentinel values to stop the workers
-    for _ in range(cpu_count()):
-        queue.put(None)
-
-    # Close the pool and wait for the work to finish
-    pool.close()
-    pool.join()
+        hash_pdf_pages(pdf_path, db_path)
+        pbar.update(1)
+    pbar.close()
 
     # Find similar pages
     similar_pages = find_similar_pages(db_path)
